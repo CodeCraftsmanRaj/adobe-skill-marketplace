@@ -1,0 +1,34 @@
+{
+  "name": "brand-ai-readiness-audit",
+  "version": "1.0.0",
+  "description": "A recommend-only Agent Skill Marketplace that audits a website for AI-discoverability problems (crawlability, JS-render gaps, missing/invalid structured data, uncorroborated or stale facts, entity ambiguity, facts locked in non-text) and on-site-engagement problems (weak orientation, broken deep links, interstitial friction, no context retention), then emits a single structured audit report of findings and prioritized suggested actions.",
+  "entrypoint": "audit-orchestrator",
+  "skills": [
+    {
+      "id": "audit-orchestrator",
+      "path": "skills/audit-orchestrator",
+      "entrypoint": true,
+      "role": "Composes the outputs of every other skill into the single fixed-schema audit report."
+    },
+    {
+      "id": "crawl-render-audit",
+      "path": "skills/crawl-render-audit",
+      "role": "Off-site discoverability, stage 1: can a crawler even get in and read the page (robots.txt / AI-bot access, llms.txt, SSR vs CSR, canonical/redirect hygiene)."
+    },
+    {
+      "id": "entity-corroboration-audit",
+      "path": "skills/entity-corroboration-audit",
+      "role": "Off-site discoverability, stage 2: once read, is the brand's identity and facts machine-extractable, current, and corroborated (JSON-LD Schema.org validity, freshness, sameAs/NAP corroboration, entity disambiguation)."
+    },
+    {
+      "id": "content-extractability-audit",
+      "path": "skills/content-extractability-audit",
+      "role": "Off-site discoverability, stage 3: are the actual facts a person cares about expressed as plain, quotable text, or are they locked inside images, video, canvas/SVG, or PDF-only content."
+    },
+    {
+      "id": "engagement-continuity-audit",
+      "path": "skills/engagement-continuity-audit",
+      "role": "On-site engagement: once a visitor lands (often from an AI assistant, without the surrounding conversation context), does the page orient them, honor deep links/anchors, avoid bounce-inducing friction, and offer a clear next step."
+    }
+  ]
+}
