@@ -187,13 +187,18 @@ def merge_and_prioritize(subskill_results: list) -> list:
             by_key[key] = f
         else:
             existing = by_key[key]
+            new_evidence = f.get("evidence", "")
+            old_evidence = existing.get("evidence", "")
+            merged_evidence = old_evidence if new_evidence in old_evidence else (
+                old_evidence + " | Also: " + new_evidence if new_evidence else old_evidence
+            )
             if SEVERITY_ORDER.get(f.get("severity", "low"), 3) < SEVERITY_ORDER.get(
                 existing.get("severity", "low"), 3
             ):
-                f["evidence"] = f.get("evidence", "") + " | Also: " + existing.get("evidence", "")
+                f["evidence"] = merged_evidence
                 by_key[key] = f
             else:
-                existing["evidence"] = existing.get("evidence", "") + " | Also: " + f.get("evidence", "")
+                existing["evidence"] = merged_evidence
 
     deduped = list(by_key.values())
     deduped.sort(key=lambda f: (

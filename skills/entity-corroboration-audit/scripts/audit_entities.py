@@ -17,6 +17,7 @@ import argparse
 import json
 import re
 import sys
+import html as html_module
 from datetime import datetime, timezone
 from urllib.parse import urljoin, urlparse
 
@@ -64,6 +65,7 @@ def extract_links(html, base_url, host, limit):
     seen = set()
     for m in re.finditer(r'href=["\']([^"\'#]+)', html, flags=re.IGNORECASE):
         href = m.group(1)
+        href = html_module.unescape(href)
         full = urljoin(base_url, href).split("#")[0]
         parsed = urlparse(full)
         if parsed.netloc != host or parsed.scheme not in ("http", "https"):
@@ -177,7 +179,7 @@ def run_audit(url: str, max_pages: int, timeout: int, user_agent: str) -> list:
     pages = [(url, home_resp.text)]
     for link in extract_links(home_resp.text, url, host, max_pages):
         r, err = fetch(link, headers, timeout)
-        if r is not None and err is None and r.status_code < 400:
+        if r is not None and err is None and r.status_code < 400 and "html" in r.headers.get("Content-Type", "").lower():
             pages.append((link, r.text))
 
     now = datetime.now(timezone.utc)

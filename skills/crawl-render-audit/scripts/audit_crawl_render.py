@@ -16,6 +16,7 @@ import argparse
 import json
 import re
 import sys
+import html as html_module
 from html.parser import HTMLParser
 from urllib.parse import urljoin, urlparse
 
@@ -137,6 +138,7 @@ def extract_links(html: str, base_url: str, host: str, limit: int):
     links = set()
     for m in re.finditer(r'href=["\']([^"\'#]+)', html, flags=re.IGNORECASE):
         href = m.group(1)
+        href = html_module.unescape(href)
         full = urljoin(base_url, href)
         parsed = urlparse(full)
         if parsed.netloc == host and parsed.scheme in ("http", "https"):
@@ -267,7 +269,7 @@ def run_audit(url: str, max_pages: int, timeout: int, user_agent: str) -> list:
         if sampled >= max_pages:
             break
         resp, err = fetch(link, headers, timeout)
-        if resp is not None and err is None:
+        if resp is not None and err is None and "html" in resp.headers.get("Content-Type", "").lower():
             pages_to_check.append((link, resp))
             sampled += 1
 
