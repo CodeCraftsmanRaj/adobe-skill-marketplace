@@ -63,27 +63,55 @@ def fetch(url, headers, timeout):
 def extract_links(html, base_url, host, limit):
     links = []
     seen = set()
+
+    NON_HTML_EXTENSIONS = (
+        ".css", ".js", ".json", ".xml", ".txt",
+        ".pdf", ".zip", ".gz",
+        ".png", ".jpg", ".jpeg", ".gif", ".webp", ".svg", ".ico",
+        ".woff", ".woff2", ".ttf", ".otf", ".eot",
+        ".mp3", ".wav", ".mp4", ".webm", ".avi",
+    )
+
     for m in re.finditer(r'href=["\']([^"\'#]+)', html, flags=re.IGNORECASE):
         href = m.group(1)
         href = html_module.unescape(href)
+
         full = urljoin(base_url, href).split("#")[0]
         parsed = urlparse(full)
+
         if parsed.netloc != host or parsed.scheme not in ("http", "https"):
             continue
+
+        # Ignore obvious non-HTML resources before fetching.
+        if parsed.path.lower().endswith(NON_HTML_EXTENSIONS):
+            continue
+
         if full in seen:
             continue
+
         seen.add(full)
+
+        # Prefer likely content pages.
         score = 0
         low = full.lower()
-        for kw in ("product", "shop", "pricing", "price", "about", "contact", "company"):
+
+        for kw in (
+            "docs", "reference", "guide", "article",
+            "product", "shop", "pricing", "about",
+            "contact", "company",
+        ):
             if kw in low:
                 score += 1
+
         links.append((score, full))
+
+        # Collect enough candidates before ranking.
         if len(links) >= limit * 4:
             break
-    links.sort(key=lambda t: -t[0])
-    return [u for _, u in links[:limit]]
 
+    links.sort(key=lambda item: -item[0])
+
+    return [url for _, url in links[:limit]]
 
 def strip_tags(html: str) -> str:
     text = re.sub(r'<(script|style)\b[^>]*>.*?</\1>', ' ', html, flags=re.IGNORECASE | re.DOTALL)
@@ -140,6 +168,217 @@ def parse_date(value: str):
     return None
 
 
+def normalize_fact(value):
+    """Normalize simple entity facts before comparison."""
+    if value is None:
+        return ""
+
+    if isinstance(value, dict):
+        # Useful for schema.org PostalAddress
+        parts = []
+        for key in (
+            "streetAddress",
+            "addressLocality",
+            "addressRegion",
+            "postalCode",
+            "addressCountry",
+        ):
+            if value.get(key):
+                parts.append(str(value[key]))
+        value = " ".join(parts)
+
+    value = html_module.unescape(str(value)).strip().lower()
+    # Normalize whitespace
+    value = re.sub(r"\s*\(@[^)]*\)", "", value)
+    # Normalize URLs
+    if value.startswith(("http://", "https://")):
+        value = value.rstrip("/")
+        value = re.sub(r"^https?://(www\.)?", "", value)
+
+    # Normalize phone numbers
+    digits = re.sub(r"\D", "", value)
+    if len(digits) >= 7:
+        return digits
+
+    return value
+
+
+def fetch_corroboration(url, headers, timeout):
+    """Fetch one public corroboration source using read-only GET."""
+    parsed = urlparse(url)
+
+    if parsed.scheme not in ("http", "https"):
+        return None, "unsupported scheme"
+
+    try:
+        resp = requests.get(
+            url,
+            headers=headers,
+            timeout=timeout,
+            allow_redirects=True,
+        )
+
+        if resp.status_code >= 400:
+            return None, f"HTTP {resp.status_code}"
+
+        content_type = resp.headers.get("Content-Type", "").lower()
+
+        if not any(t in content_type for t in ("text/html", "application/json")):
+            return None, f"unsupported content type: {content_type}"
+
+        return resp, None
+
+    except requests.RequestException as exc:
+        return None, str(exc)
+    
+
+
+def extract_corroboration_facts(html):
+    """Extract simple identity facts from an external HTML page."""
+    facts = {}
+
+    blocks = load_jsonld_blocks(html)
+
+    for block in blocks:
+        types = get_type(block)
+
+        if any(
+            t in ("Organization", "Corporation", "LocalBusiness", "Brand", "Product")
+            for t in types
+        ):
+            for field in ("name", "url", "telephone", "sku", "gtin", "mpn"):
+                if block.get(field):
+                    facts[field] = normalize_fact(block[field])
+
+            if block.get("brand"):
+                brand = block["brand"]
+                if isinstance(brand, dict):
+                    brand = brand.get("name")
+                if brand:
+                    facts["brand"] = normalize_fact(brand)
+
+            if block.get("address"):
+                facts["address"] = normalize_fact(block["address"])
+
+            offers = block.get("offers")
+            if isinstance(offers, list):
+                offers = offers[0] if offers else None
+
+            if isinstance(offers, dict):
+                for field in ("price", "priceCurrency", "availability"):
+                    if offers.get(field):
+                        facts[field] = normalize_fact(offers[field])
+
+            if facts:
+                return facts
+
+    # Fallback: use visible page title if no structured entity was found.
+    title_match = re.search(
+        r"<title[^>]*>(.*?)</title>",
+        html,
+        flags=re.IGNORECASE | re.DOTALL,
+    )
+
+    if title_match:
+        title = strip_tags(title_match.group(1))
+
+    # Social/profile page titles often contain extra UI text.
+    # Extract the actual profile name instead of treating the full
+    # browser title as the entity name.
+    title = re.split(
+        r"\s*(?:\||•|-)\s*(?:instagram|facebook|twitter|x|linkedin|photos|videos|official).*",
+        title,
+        flags=re.IGNORECASE,
+    )[0]
+
+    title = title.strip()
+
+    if title:
+        facts["name"] = normalize_fact(title)
+
+    return facts
+
+
+
+def compare_entity_facts(website_facts, external_facts):
+    """Return fields that exist in both sources but disagree."""
+    conflicts = []
+
+    for field in (
+        "name",
+        "url",
+        "telephone",
+        "address",
+        "brand",
+        "sku",
+        "gtin",
+        "mpn",
+        "price",
+        "priceCurrency",
+        "availability",
+    ):
+        website_value = website_facts.get(field)
+        external_value = external_facts.get(field)
+
+        if not website_value or not external_value:
+            continue
+
+        if normalize_fact(website_value) != normalize_fact(external_value):
+            conflicts.append(
+                {
+                    "field": field,
+                    "website": website_value,
+                    "external": external_value,
+                }
+            )
+
+    return conflicts
+
+
+
+def classify_page_type(page_url: str, html: str, is_homepage: bool) -> str:
+    """
+    Classify the page only when there is enough evidence to expect
+    page-specific structured data.
+    """
+    if is_homepage:
+        return "homepage"
+
+    low_url = page_url.lower()
+
+    # Product/commercial pages
+    if any(term in low_url for term in (
+        "/product", "/products/", "/shop/", "/store/",
+        "/item/", "/p/", "/dp/"
+    )):
+        return "product"
+
+    # Article/blog/news pages
+    if any(term in low_url for term in (
+        "/blog/", "/article/", "/articles/", "/news/",
+        "/stories/", "/posts/"
+    )):
+        return "article"
+
+    # Documentation/reference pages do not inherently require JSON-LD.
+    if any(term in low_url for term in (
+        "/docs/", "/documentation/", "/reference/",
+        "/guide/", "/guides/", "/developer/"
+    )):
+        return "documentation"
+
+    # Look for strong HTML hints for articles.
+    if re.search(
+        r'<(?:article|main)[^>]*class=["\'][^"\']*'
+        r'(?:article|blog|post|news)[^"\']*["\']',
+        html,
+        re.IGNORECASE,
+    ):
+        return "article"
+
+    return "generic"
+
+
 def run_audit(url: str, max_pages: int, timeout: int, user_agent: str) -> list:
     findings = []
     fid = 1
@@ -185,6 +424,8 @@ def run_audit(url: str, max_pages: int, timeout: int, user_agent: str) -> list:
     now = datetime.now(timezone.utc)
     org_like_found = False
     brand_name_guess = None
+    corroboration_attempts = 0
+    max_corroboration_sources = 2
 
     for page_url, html in pages:
         blocks = load_jsonld_blocks(html)
@@ -204,18 +445,53 @@ def run_audit(url: str, max_pages: int, timeout: int, user_agent: str) -> list:
                 page_url,
             )
 
+        page_type = classify_page_type(
+            page_url,
+            html,
+            is_homepage=(page_url == url),
+        )
+
         if not real_blocks:
-            add(
-                "No valid JSON-LD structured data found on page",
-                "high",
-                f"{page_url}: 0 parsable <script type=\"application/ld+json\"> blocks.",
-                "Add schema.org JSON-LD appropriate to the page (Organization on the homepage, "
-                "Product on product pages, Article on blog posts) so AI assistants can extract "
-                "brand and product facts without guessing from prose.",
-                "high",
-                "jsonld-missing",
-                page_url,
-            )
+            if page_type == "homepage":
+                add(
+                    "No valid JSON-LD structured data found on homepage",
+                    "high",
+                    f"{page_url}: homepage has 0 parsable "
+                    '<script type="application/ld+json"> blocks.',
+                    "Add Organization JSON-LD to the homepage so assistants can "
+                    "identify the brand and its authoritative identity.",
+                    "high",
+                    "jsonld-missing",
+                    page_url,
+                )
+
+            elif page_type == "product":
+                add(
+                    "No Product structured data found on product page",
+                    "high",
+                    f"{page_url}: product-like page has 0 parsable "
+                    '<script type="application/ld+json"> blocks.',
+                    "Add Product JSON-LD with the product name and relevant Offer "
+                    "information so assistants can extract exact product facts.",
+                    "high",
+                    "jsonld-missing-product",
+                    page_url,
+                )
+
+            elif page_type == "article":
+                add(
+                    "No Article structured data found on article page",
+                    "high",
+                    f"{page_url}: article-like page has 0 parsable "
+                    '<script type="application/ld+json"> blocks.',
+                    "Add Article or BlogPosting JSON-LD with author and publication "
+                    "or modification dates so assistants can identify and assess "
+                    "the content.",
+                    "high",
+                    "jsonld-missing-article",
+                    page_url,
+                )
+                # Documentation and generic pages do not get a missing-JSON-LD finding.
             continue
 
         for block in real_blocks:
@@ -224,6 +500,85 @@ def run_audit(url: str, max_pages: int, timeout: int, user_agent: str) -> list:
             if any(t in ("Organization", "LocalBusiness", "Corporation") for t in types):
                 org_like_found = True
                 brand_name_guess = brand_name_guess or block.get("name")
+                                # External corroboration through sameAs links.
+                same_as = block.get("sameAs", [])
+
+                if isinstance(same_as, str):
+                    same_as = [same_as]
+
+                if isinstance(same_as, list):
+                    for external_url in same_as:
+                        if corroboration_attempts >= max_corroboration_sources:
+                            break
+
+                        if not isinstance(external_url, str):
+                            continue
+
+                        if not any(
+                            domain in external_url.lower()
+                            for domain in AUTHORITATIVE_DOMAINS
+                        ):
+                            continue
+
+                        corroboration_attempts += 1
+
+                        external_resp, external_err = fetch_corroboration(
+                            external_url,
+                            headers,
+                            timeout,
+                        )
+
+                        if external_err or external_resp is None:
+                            continue
+
+                        external_facts = extract_corroboration_facts(
+                            external_resp.text
+                        )
+
+                        website_facts = {
+                            "name": block.get("name"),
+                            "url": block.get("url"),
+                            "telephone": block.get("telephone"),
+                            "address": block.get("address"),
+                        }
+
+                        conflicts = compare_entity_facts(
+                            website_facts,
+                            external_facts,
+                        )
+
+                        if conflicts:
+                            details = "; ".join(
+                                f"{c['field']}: website={c['website']!r}, "
+                                f"external={c['external']!r}"
+                                for c in conflicts
+                            )
+
+                            add(
+                                "Entity facts conflict with an external corroboration source",
+                                "high",
+                                f"{page_url}: compared against {external_url}. "
+                                f"Conflicts: {details}",
+                                "Review the conflicting entity facts and make the "
+                                "website's structured data consistent with the "
+                                "authoritative external source.",
+                                "high",
+                                "external-corroboration-conflict",
+                                page_url,
+                            )
+                        else:
+                            add(
+                                "Entity identity corroborated by an external source",
+                                "low",
+                                f"{page_url}: entity facts were compared with "
+                                f"{external_url}; no conflicting shared identity "
+                                "fields were found.",
+                                "No action required. Keep the website identity "
+                                "facts synchronized with the corroborating source.",
+                                "low",
+                                "external-corroboration-success",
+                                page_url,
+                            )
                 missing = [f for f in ("name", "url") if not block.get(f)]
                 if missing:
                     add(
@@ -250,24 +605,47 @@ def run_audit(url: str, max_pages: int, timeout: int, user_agent: str) -> list:
                     )
                 addr = block.get("address")
                 phone = block.get("telephone")
-                if addr:
-                    addr_str = addr if isinstance(addr, str) else json.dumps(addr)
-                    visible = strip_tags(html)
-                    # crude check: does at least the postal code / street number show in visible text?
-                    tokens = re.findall(r'\d{3,}', addr_str)
-                    if tokens and not any(tok in visible for tok in tokens):
-                        add(
-                            "Address in structured data doesn't appear anywhere in visible page text",
-                            "medium",
-                            f"{page_url}: structured address contains {tokens} not found in "
-                            "rendered text.",
-                            "Make sure the same address shown to machines in JSON-LD is also "
-                            "present as plain visible text (e.g. in the footer) — consistency "
-                            "between the two is itself a trust signal.",
-                            "medium",
-                            "nap-address-mismatch",
-                            page_url,
-                        )
+            # if addr:
+            #     addr_str = addr if isinstance(addr, str) else json.dumps(addr)
+            #     visible = strip_tags(html)
+
+            #     # Only flag an address mismatch when a meaningful address component
+            #     # is present in structured data but absent from visible page text.
+            #     address_parts = []
+
+            #     if isinstance(addr, dict):
+            #         for key in ("streetAddress", "addressLocality", "addressRegion", "postalCode"):
+            #             value = addr.get(key)
+            #             if value:
+            #                 address_parts.append(str(value))
+            #     else:
+            #         address_parts.append(str(addr))
+
+            #     normalized_visible = re.sub(r"\s+", " ", visible).lower()
+
+            #     # Check the strongest/most meaningful components first.
+            #     meaningful_parts = [
+            #         part.strip()
+            #         for part in address_parts
+            #         if len(part.strip()) >= 4
+            #     ]
+
+            #     matched = any(
+            #         re.sub(r"\s+", " ", part).lower() in normalized_visible
+            #         for part in meaningful_parts
+            #     )
+
+            #     if meaningful_parts and not matched:
+            #         add(
+            #             "Address in structured data doesn't appear anywhere in visible page text",
+            #             "medium",
+            #             f"{page_url}: structured address '{addr_str}' was not found in rendered text.",
+            #             "Make sure the same address shown to machines in JSON-LD is also "
+            #             "present as plain visible text (e.g. in the footer) when appropriate.",
+            #             "medium",
+            #             "nap-address-mismatch",
+            #             page_url,
+            #         )
                 if phone:
                     visible = strip_tags(html)
                     digits_struct = re.sub(r'\D', '', str(phone))
