@@ -140,6 +140,8 @@ def extract_links(html: str, base_url: str, host: str, limit: int):
         href = m.group(1)
         href = html_module.unescape(href)
         full = urljoin(base_url, href)
+        if any(p in full.lower() for p in ("xmlrpc.php", "wp-json/", "wp-login.php", "wp-cron.php", "/feed/", "/feed")):
+            continue
         parsed = urlparse(full)
         if parsed.netloc == host and parsed.scheme in ("http", "https"):
             links.add(full.split("#")[0])

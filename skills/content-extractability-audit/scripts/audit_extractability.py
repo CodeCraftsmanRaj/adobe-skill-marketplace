@@ -59,7 +59,10 @@ def extract_links(html, base_url, host, limit):
     for m in re.finditer(r'href=["\']([^"\'#]+)', html, flags=re.IGNORECASE):
         href = m.group(1)
         href = html_module.unescape(href)
+        
         full = urljoin(base_url, href).split("#")[0]
+        if any(p in full.lower() for p in ("xmlrpc.php", "wp-json/", "wp-login.php", "wp-cron.php", "/feed/", "/feed")):
+            continue
         parsed = urlparse(full)
         if parsed.netloc != host or parsed.scheme not in ("http", "https"):
             continue
@@ -301,24 +304,29 @@ def run_audit(url: str, max_pages: int, timeout: int, user_agent: str) -> list:
             )
 
         prev_level = 0
-        skipped = False
-        for lvl, _ in headings:
+        skip_idx = None
+        all_levels = [lvl for lvl, _ in headings]
+        for idx, lvl in enumerate(all_levels):
             if prev_level and lvl > prev_level + 1:
-                skipped = True
+                skip_idx = idx
                 break
             prev_level = lvl
-        if skipped:
+        if skip_idx is not None:
+            window_start = max(0, skip_idx - 3)
+            window_end = min(len(all_levels), skip_idx + 3)
+            context = all_levels[window_start:window_end]
             add(
                 "Heading hierarchy skips levels (e.g. h2 followed directly by h4)",
                 "low",
-                f"{page_url}: heading sequence is {[l for l, _ in headings]}.",
+                f"{page_url}: found a level jump at heading #{skip_idx + 1} "
+                f"(h{all_levels[skip_idx - 1] if skip_idx > 0 else '?'} -> h{all_levels[skip_idx]}). "
+                f"Levels around it: {context} (out of {len(all_levels)} total headings on page).",
                 "Keep heading levels sequential so an extractor's section segmentation "
                 "reflects the page's actual structure.",
                 "low",
                 "heading-hierarchy-skip",
                 page_url,
             )
-
     return findings
 
 
