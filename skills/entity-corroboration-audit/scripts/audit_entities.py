@@ -17,6 +17,7 @@ import argparse
 import json
 import re
 import sys
+import html as html_module
 from datetime import datetime, timezone
 from urllib.parse import urljoin, urlparse
 
@@ -64,11 +65,14 @@ def extract_links(html, base_url, host, limit):
     seen = set()
 
     NON_HTML_EXT = (".png", ".jpg", ".jpeg", ".gif", ".svg", ".ico", ".css", ".js",
-                 ".xml", ".json", ".webmanifest", ".pdf", ".woff", ".woff2", ".mp4", ".mp3")
-    
+                    ".xml", ".json", ".webmanifest", ".pdf", ".woff", ".woff2", ".mp4", ".mp3")
+
     for m in re.finditer(r'href=["\']([^"\'#]+)', html, flags=re.IGNORECASE):
         href = m.group(1)
+        href = html_module.unescape(href)
+
         full = urljoin(base_url, href).split("#")[0]
+        full = full.rstrip("/") or full
 
         if full.lower().split("?")[0].endswith(NON_HTML_EXT):
             continue
@@ -185,7 +189,7 @@ def run_audit(url: str, max_pages: int, timeout: int, user_agent: str) -> list:
     pages = [(url, home_resp.text)]
     for link in extract_links(home_resp.text, url, host, max_pages):
         r, err = fetch(link, headers, timeout)
-        if r is not None and err is None and r.status_code < 400:
+        if r is not None and err is None and r.status_code < 400 and "html" in r.headers.get("Content-Type", "").lower():
             pages.append((link, r.text))
 
     now = datetime.now(timezone.utc)

@@ -187,13 +187,18 @@ def merge_and_prioritize(subskill_results: list) -> list:
             by_key[key] = f
         else:
             existing = by_key[key]
+            new_evidence = f.get("evidence", "")
+            old_evidence = existing.get("evidence", "")
+            merged_evidence = old_evidence if new_evidence in old_evidence else (
+                old_evidence + " | Also: " + new_evidence if new_evidence else old_evidence
+            )
             if SEVERITY_ORDER.get(f.get("severity", "low"), 3) < SEVERITY_ORDER.get(
                 existing.get("severity", "low"), 3
             ):
-                f["evidence"] = f.get("evidence", "") + " | Also: " + existing.get("evidence", "")
+                f["evidence"] = merged_evidence
                 by_key[key] = f
             else:
-                existing["evidence"] = existing.get("evidence", "") + " | Also: " + f.get("evidence", "")
+                existing["evidence"] = merged_evidence
 
     deduped = list(by_key.values())
     deduped.sort(key=lambda f: (
@@ -217,6 +222,13 @@ def build_report(site: str, findings: list) -> dict:
         sev = f.get("severity", "low")
         counts[sev] = counts.get(sev, 0) + 1
 
+    score = 100
+    score -= counts.get("critical", 0) * 20
+    score -= counts.get("high", 0) * 12
+    score -= counts.get("medium", 0) * 6
+    score -= counts.get("low", 0) * 2
+    score = max(0, min(100, score))
+
     return {
         "site": site,
         "audited_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
@@ -226,6 +238,7 @@ def build_report(site: str, findings: list) -> dict:
             "high": counts.get("high", 0),
             "medium": counts.get("medium", 0),
             "low": counts.get("low", 0),
+            "ai_readiness_score": score,
         },
         "findings": findings,
     }
