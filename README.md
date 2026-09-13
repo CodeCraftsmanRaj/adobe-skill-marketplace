@@ -77,6 +77,13 @@ pip install requests
 python3 skills/audit-orchestrator/scripts/orchestrate.py --url https://example.com
 ```
 
+With `uv`:
+
+```bash
+uv sync
+uv run python skills/audit-orchestrator/scripts/orchestrate.py --url https://example.com
+```
+
 Optional flags: `--max-pages` (default 8, capped at 15), `--timeout` (per-request seconds,
 default 10), `--user-agent`, `--out report.json` to also save a copy to disk. Typical runtime
 for a normal marketing/e-commerce site is well under the 5-minute budget.
