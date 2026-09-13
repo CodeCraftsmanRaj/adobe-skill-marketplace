@@ -63,13 +63,20 @@ def fetch(url, headers, timeout):
 def extract_links(html, base_url, host, limit):
     links = []
     seen = set()
+
+    NON_HTML_EXT = (".png", ".jpg", ".jpeg", ".gif", ".svg", ".ico", ".css", ".js",
+                    ".xml", ".json", ".webmanifest", ".pdf", ".woff", ".woff2", ".mp4", ".mp3")
+
     for m in re.finditer(r'href=["\']([^"\'#]+)', html, flags=re.IGNORECASE):
         href = m.group(1)
         href = html_module.unescape(href)
 
         full = urljoin(base_url, href).split("#")[0]
         full = full.rstrip("/") or full
-        
+
+        if full.lower().split("?")[0].endswith(NON_HTML_EXT):
+            continue
+
         parsed = urlparse(full)
         if parsed.netloc != host or parsed.scheme not in ("http", "https"):
             continue

@@ -136,13 +136,22 @@ def agent_is_blocked(rules: dict, agent: str, path: str = "/") -> bool:
 
 def extract_links(html: str, base_url: str, host: str, limit: int):
     links = set()
+
+    NON_HTML_EXT = (".png", ".jpg", ".jpeg", ".gif", ".svg", ".ico", ".css", ".js",
+                    ".xml", ".json", ".webmanifest", ".pdf", ".woff", ".woff2", ".mp4", ".mp3")
+
     for m in re.finditer(r'href=["\']([^"\'#]+)', html, flags=re.IGNORECASE):
         href = m.group(1)
         href = html_module.unescape(href)
         full = urljoin(base_url, href)
         full = full.rstrip("/") or full
+
+        if full.lower().split("?")[0].endswith(NON_HTML_EXT):
+            continue
+
         if any(p in full.lower() for p in ("xmlrpc.php", "wp-json/", "wp-login.php", "wp-cron.php", "/feed/", "/feed")):
             continue
+
         parsed = urlparse(full)
         if parsed.netloc == host and parsed.scheme in ("http", "https"):
             links.add(full.split("#")[0])
