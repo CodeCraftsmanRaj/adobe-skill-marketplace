@@ -140,6 +140,7 @@ def extract_links(html: str, base_url: str, host: str, limit: int):
         href = m.group(1)
         href = html_module.unescape(href)
         full = urljoin(base_url, href)
+        full = full.rstrip("/") or full
         if any(p in full.lower() for p in ("xmlrpc.php", "wp-json/", "wp-login.php", "wp-cron.php", "/feed/", "/feed")):
             continue
         parsed = urlparse(full)
@@ -270,6 +271,11 @@ def run_audit(url: str, max_pages: int, timeout: int, user_agent: str) -> list:
     for link in links:
         if sampled >= max_pages:
             break
+
+        link_path = urlparse(link).path or "/"
+        if agent_is_blocked(rules, user_agent, link_path):
+            continue
+
         resp, err = fetch(link, headers, timeout)
         if resp is not None and err is None and "html" in resp.headers.get("Content-Type", "").lower():
             pages_to_check.append((link, resp))
@@ -312,6 +318,7 @@ def run_audit(url: str, max_pages: int, timeout: int, user_agent: str) -> list:
 
         visible_text = parser.visible_text()
         visible_len = len(visible_text)
+
         if visible_len < 150 and parser.script_bytes > 2000:
             spa_note = (" A near-empty SPA root container was also detected."
                         if parser._root_div_text_len < 50 and parser._root_div_depth is None

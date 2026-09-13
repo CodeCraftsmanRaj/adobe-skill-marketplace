@@ -78,6 +78,7 @@ def extract_links(html, base_url, host, limit):
         href = html_module.unescape(href)
 
         full = urljoin(base_url, href).split("#")[0]
+        full = full.rstrip("/") or full
         if any(p in full.lower() for p in ("xmlrpc.php", "wp-json/", "wp-login.php", "wp-cron.php", "/feed/", "/feed")):
             continue
         parsed = urlparse(full)

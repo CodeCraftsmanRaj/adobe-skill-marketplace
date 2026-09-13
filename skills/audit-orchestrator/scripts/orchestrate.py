@@ -222,6 +222,13 @@ def build_report(site: str, findings: list) -> dict:
         sev = f.get("severity", "low")
         counts[sev] = counts.get(sev, 0) + 1
 
+    score = 100
+    score -= counts.get("critical", 0) * 20
+    score -= counts.get("high", 0) * 12
+    score -= counts.get("medium", 0) * 6
+    score -= counts.get("low", 0) * 2
+    score = max(0, min(100, score))
+
     return {
         "site": site,
         "audited_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
@@ -231,6 +238,7 @@ def build_report(site: str, findings: list) -> dict:
             "high": counts.get("high", 0),
             "medium": counts.get("medium", 0),
             "low": counts.get("low", 0),
+            "ai_readiness_score": score,
         },
         "findings": findings,
     }

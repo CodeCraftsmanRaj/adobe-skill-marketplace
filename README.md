@@ -70,7 +70,7 @@ brand-ai-readiness-audit/          <- marketplace root (zip this directory)
 
 ## Running it
 
-Requires Python 3.8+ and the `requests` package:
+Requires Python 3.13+ and the `requests` package:
 
 ```bash
 pip install requests
@@ -81,7 +81,7 @@ Optional flags: `--max-pages` (default 8, capped at 15), `--timeout` (per-reques
 default 10), `--user-agent`, `--out report.json` to also save a copy to disk. Typical runtime
 for a normal marketing/e-commerce site is well under the 5-minute budget.
 
-Each sub-skill script is also independently runnable and spec-compliant on its own, e.g.:
+Each sub-skill script is also independently runnable on its own, e.g.:
 
 ```bash
 python3 skills/crawl-render-audit/scripts/audit_crawl_render.py --url https://example.com
@@ -95,8 +95,15 @@ Every audit produces a JSON object with at least this shape (extra fields — `c
 ```json
 {
   "site": "example.com",
-  "audited_at": "2026-09-20T14:32:00Z",
-  "summary": { "total_findings": 6, "critical": 1, "high": 2, "medium": 3 },
+  "audited_at": "2026-09-13T17:52:27Z",
+  "summary": {
+    "total_findings": 6,
+    "critical": 1,
+    "high": 1,
+    "medium": 1,
+    "low": 3,
+    "ai_readiness_score": 56
+  },
   "findings": [
     {
       "id": "F-001",
@@ -119,9 +126,8 @@ Every audit produces a JSON object with at least this shape (extra fields — `c
 - **Polite by default.** Every request sets an identifying User-Agent, respects short timeouts,
   and caps the number of internal pages sampled (default 8, hard cap 15) to stay well under the
   5-minute runtime budget and avoid rate abuse.
-- **robots.txt-aware.** `crawl-render-audit` reads and reports on robots.txt rules; it does not
-  fetch the sample pages used by the other skills through anything other than a normal,
-  identified GET request.
+- **robots.txt-aware.** `crawl-render-audit` reads and reports on robots.txt rules and skips
+  sample pages disallowed for the configured crawler user-agent.
 - **Graceful degradation.** Any sub-skill failure (timeout, network error, malformed JSON)
   degrades to a single low-severity meta-finding rather than crashing the whole audit.
 - **No external services required.** Every skill runs locally against `requests` +
